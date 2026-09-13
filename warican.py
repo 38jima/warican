@@ -7,6 +7,9 @@ def optimize_fee(
     unit=500,
     min_recovery_rate=0.98,
     beta=0.6,
+    on_solution=None,
+    min_payment=0,
+    max_payment=None,
 ):
     """
     飲み会の等級別集金額をMILPで最適化する。
@@ -31,10 +34,14 @@ def optimize_fee(
         傾斜の上限。
         d_{G-1} <= beta * (d_1 + d_2)
 
+    on_solution : callable, optional
+        最適解が1件見つかるたびに呼び出すコールバック。
+        引数として、見つかった最適解のリストを渡す。
+
     Returns
     -------
     dict
-        最適化結果
+        最適化結果。solutionsに全ての最適解を格納する。
     """
 
     G = len(n)
@@ -126,43 +133,36 @@ def optimize_fee(
 
     # ------------------------------------------------------------
     # (1) 最低回収率
-    #
-    # C >= (1-alpha) * P
-    # ------------------------------------------------------------
-
     model += (total_collection >= min_recovery_rate * total_payment)
 
     # ------------------------------------------------------------
     # (2) 隣接等級間の差 >= unit
-    #
-    # d_g >= unit
-    # ------------------------------------------------------------
-
     for g in range(G - 1):
         model += (d[g] >= unit)
 
     # ------------------------------------------------------------
     # (3) 上位等級ほど傾斜を大きくする
-    #
-    # d_1 <= d_2 <= ... <= d_{G-1}
-    # ------------------------------------------------------------
-
     for g in range(G - 2):
         model += (d[g] <= d[g + 1])
 
     # ------------------------------------------------------------
     # (4) 傾斜の上限
-    #
-    # d_{G-1} <= beta * (d_1 + d_2)
-    # ------------------------------------------------------------
-
     model += (d[G - 2] <= beta * (d[0] + d[1]))
+
+    # ------------------------------------------------------------
+    # (5) 最低支払額
+    model += (x[0] >= min_payment)
+
+    # ------------------------------------------------------------
+    # (6) 最高支払額
+    model += (x[G - 1] <= max_payment)
+    
 
     # ============================================================
     # 求解
     # ============================================================
 
-    solver = pulp.PULP_CBC_CMD(msg=True)
+    solver = pulp.PULP_CBC_CMD(msg=False)
 
     status = model.solve(solver)
 
@@ -175,27 +175,67 @@ def optimize_fee(
     if status_str != "Optimal":
         raise RuntimeError(f"最適解が得られませんでした: {status_str}")
 
-    # 集金額
-    fees = [int(round(pulp.value(x[g]))) for g in range(G)]
+    # 目的関数を固定して、同じ最適値を持つ料金ベクトルを列挙する。
+    optimal_error = int(round(pulp.value(error)))
+    model += error == optimal_error
 
-    # 等級間差
-    differences = [fees[g + 1] - fees[g] for g in range(G - 1)]
+    upper_bounds = [
+        (total_payment + optimal_error) // (unit * num)
+        for num in n
+    ]
+    for variable, upper_bound in zip(k, upper_bounds):
+        variable.upBound = upper_bound
 
-    # 総回収額
-    collection = sum(
-        n[g] * fees[g]
-        for g in range(G)
-    )
+    solutions = []
+    solver = pulp.PULP_CBC_CMD(msg=False)
 
-    return {
-        "fees": fees,
-        "differences": differences,
-        "total_collection": collection,
-        "total_payment": total_payment,
-        "difference": abs(collection - total_payment),
-        "recovery_rate": collection / total_payment,
-        "status": status_str,
-    }
+    while model.solve(solver) == pulp.LpStatusOptimal:
+        fees = [int(round(pulp.value(x[g]))) for g in range(G)]
+        differences = [fees[g + 1] - fees[g] for g in range(G - 1)]
+        collection = sum(n[g] * fees[g] for g in range(G))
+
+        solutions.append(
+            {
+                "fees": fees,
+                "differences": differences,
+                "total_collection": collection,
+                "total_payment": total_payment,
+                "difference": abs(collection - total_payment),
+                "recovery_rate": collection / total_payment,
+                "status": "Optimal",
+            }
+        )
+
+        if on_solution is not None:
+            on_solution(solutions)
+
+        # 次回以降、この料金ベクトルだけを除外する。
+        difference_flags = []
+        for index, (variable, fee, upper_bound) in enumerate(
+            zip(k, fees, upper_bounds)
+        ):
+            fee_units = fee // unit
+            big_m = max(1, upper_bound + 1)
+            increase = pulp.LpVariable(
+                f"solution_{len(solutions)}_{index}_increase",
+                cat=pulp.LpBinary,
+            )
+            decrease = pulp.LpVariable(
+                f"solution_{len(solutions)}_{index}_decrease",
+                cat=pulp.LpBinary,
+            )
+            model += variable - fee_units >= 1 - big_m * (1 - increase)
+            model += fee_units - variable >= 1 - big_m * (1 - decrease)
+            difference_flags.extend([increase, decrease])
+
+        model += pulp.lpSum(difference_flags) >= 1
+
+    if not solutions:
+        raise RuntimeError("最適解を列挙できませんでした。")
+
+    result = solutions[0].copy()
+    result["solutions"] = solutions
+    return result
 
 
 if __name__ == "__main__":
