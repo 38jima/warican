@@ -34,10 +34,10 @@ def main():
             max_value=1.00,
             value=0.99,
             step=0.01,
-            format="%.0f%%",
+            format="%.2f%%",
         )
         beta = st.slider(
-            "傾斜の上限 beta",
+            "傾斜の上限パラメータ β",
             min_value=0.50,
             max_value=1.50,
             value=1.00,
