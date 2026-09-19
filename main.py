@@ -37,6 +37,7 @@ def main():
             min_value=1,
             value=500,
             step=100,
+            help="支払総額の下3桁が251~749で、奇数人の等級がある場合は500がおすすめ。他は1000がおすすめ。"
         )
         min_payment = st.number_input(
             "最低支払額（円）",
@@ -56,7 +57,7 @@ def main():
             max_value=100.0,
             value=99.0,
             step=1.0,
-            format="%.0f%%",
+            format="%.1f%%",
         ) / 100
         beta = st.slider(
             "傾斜の上限パラメータ β",
@@ -65,6 +66,7 @@ def main():
             value=1.00,
             step=0.01,
             format="%.2f",
+            help="最高等級と2番目に高い等級の一人当たりの支払金額の差 ≦ β(最低等級と3番目に低い等級の一人当たりの支払金額の差)"
         )
 
     with st.form("fee_form"):
@@ -87,7 +89,7 @@ def main():
                     st.number_input(
                         "人数",
                         min_value=1,
-                        value=max(1, 10 - index * 3),
+                        value=1,
                         step=1,
                         key=f"grade_count_{index}",
                     )
@@ -158,8 +160,10 @@ def main():
     metric_columns[2].metric("回収率", f"{solutions[0]['recovery_rate']:.2%}")
     metric_columns[3].metric("ステータス", result["status"])
 
-    if solutions[0]["total_collection"] >= solutions[0]["total_payment"]:
-        st.success("支払総額以上を回収する結果です。")
+    if solutions[0]["total_collection"] > solutions[0]["total_payment"]:
+        st.success("支払総額を上回る結果です。")
+    elif solutions[0]["total_collection"] == solutions[0]["total_payment"]:
+            st.success("支払総額ちょうどを回収する結果です。")
     else:
         st.warning("支払総額を下回る結果です。最低回収率の条件は満たしています。")
 
